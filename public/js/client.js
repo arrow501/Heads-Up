@@ -7,7 +7,8 @@ const roomCode = window.roomCode;
 const isHost = window.isHost;
 
 // Initialize webSocket
-const wsManager = new WebSocketManager("wss://janek-to-gej.onrender.com"); //ws://localhost:3000
+const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+const wsManager = new WebSocketManager(`${wsProtocol}//${window.location.host}`);
 wsManager.init(roomCode, playerName, isHost);
 
 // Set up WebSocket message handlers
