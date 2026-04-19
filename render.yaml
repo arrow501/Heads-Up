@@ -1,9 +1,3 @@
-databases:
-  - name: heads-up-db
-    plan: free
-    databaseName: heads_up
-    user: heads_up_user
-
 services:
   - type: web
     name: heads-up
@@ -12,9 +6,5 @@ services:
     buildCommand: npm install
     startCommand: node server.js
     envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: heads-up-db
-          property: connectionString
       - key: NODE_ENV
         value: production
