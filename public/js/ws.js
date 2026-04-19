@@ -1,45 +1,52 @@
 export class WebSocketManager {
   constructor(url) {
-    this.ws = new WebSocket(url);
+    this._url = url;
+    this._reconnectDelay = 1_000;
+    this._intentionalClose = false;
     this.roomCode = null;
     this.playerName = null;
     this.isHost = false;
+    this._reconnectToken = null;
     this.messageHandlers = {};
-
-    this.ws.onopen = this.onOpen.bind(this);
-    this.ws.onmessage = this.onMessage.bind(this);
+    this._connect();
   }
 
-  // Initialize WebSocket with room and player info
-  init(roomCode, playerName, isHost) {
-    this.roomCode = roomCode;
-    this.playerName = playerName;
-    this.isHost = isHost;
+  _connect() {
+    this.ws = new WebSocket(this._url);
+    this.ws.onopen = this._onOpen.bind(this);
+    this.ws.onmessage = this._onMessage.bind(this);
+    this.ws.onclose = this._onClose.bind(this);
+    this.ws.onerror = (e) => console.error("WS error", e);
   }
 
-  // Register a message handler for a specific message type
-  on(type, handler) {
-    this.messageHandlers[type] = handler;
+  _onOpen() {
+    this._reconnectDelay = 1_000;
+    if (!this.roomCode || !this.playerName) return;
+
+    if (this._reconnectToken) {
+      this.sendMessage({
+        type: "reconnect",
+        roomCode: this.roomCode,
+        playerName: this.playerName,
+        reconnectToken: this._reconnectToken,
+      });
+    } else {
+      this.sendMessage({
+        type: "get-data-from-db",
+        roomCode: this.roomCode,
+        name: this.playerName,
+      });
+    }
   }
 
-  // Handle the WebSocket connection open event
-  onOpen() {
-    console.log("WebSocket connection opened");
-    console.log(
-      `PRZESYŁAM GET DATA FROM THE DB ${this.roomCode} i ${this.playerName}`
-    );
-    this.sendMessage({
-      roomCode: this.roomCode,
-      type: "get-data-from-db",
-      name: this.playerName,
-    });
-  }
-
-  // Handle incoming WebSocket messages
-  onMessage(event) {
-    const data = JSON.parse(event.data);
+  _onMessage(event) {
+    let data;
+    try {
+      data = JSON.parse(event.data);
+    } catch {
+      return;
+    }
     const handler = this.messageHandlers[data.type];
-
     if (handler) {
       handler(data);
     } else {
@@ -47,12 +54,34 @@ export class WebSocketManager {
     }
   }
 
-  // Send a message through the WebSocket
+  _onClose(event) {
+    if (this._intentionalClose) return;
+    console.warn(`WS closed (${event.code}), reconnecting in ${this._reconnectDelay}ms`);
+    setTimeout(() => this._connect(), this._reconnectDelay);
+    this._reconnectDelay = Math.min(this._reconnectDelay * 2, 30_000);
+  }
+
+  init(roomCode, playerName, isHost, reconnectToken = null) {
+    this.roomCode = roomCode;
+    this.playerName = playerName;
+    this.isHost = isHost;
+    this._reconnectToken = reconnectToken;
+  }
+
+  on(type, handler) {
+    this.messageHandlers[type] = handler;
+  }
+
   sendMessage(message) {
     if (this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message));
     } else {
-      console.error("WebSocket is not open");
+      console.warn("WS not open, message dropped:", message.type);
     }
+  }
+
+  destroy() {
+    this._intentionalClose = true;
+    this.ws.close();
   }
 }
