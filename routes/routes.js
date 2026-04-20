@@ -1,16 +1,30 @@
 import { randomBytes } from "crypto";
-import { db } from "../models/db.js";
+import {
+  roomExists,
+  createRoom,
+  getRoom,
+  addPlayer,
+  playerExists,
+} from "../models/store.js";
 
-var codeLength = 5;
+const CODE_LENGTH = 5;
 
 export const renderLogin = (req, res) => {
   res.render("login");
 };
 
-export const handleNameSubmission = async (req, res) => {
+export const renderRoom = (req, res) => {
+  res.render("index", {
+    name: "",
+    code: req.params.code,
+    isHost: "",
+    reconnectToken: "",
+  });
+};
+
+export const handleNameSubmission = (req, res) => {
   const name =
-    req.body.name.charAt(0).toUpperCase() +
-    req.body.name.slice(1).toLowerCase();
+    req.body.name.charAt(0).toUpperCase() + req.body.name.slice(1).toLowerCase();
   const action = req.body.action;
   const code = req.body.room;
 
@@ -19,96 +33,56 @@ export const handleNameSubmission = async (req, res) => {
   }
 
   if (action === "create") {
-    await createRoom(name, res);
+    handleCreateRoom(name, res);
   } else if (action === "join") {
-    await joinRoom(name, code, res);
+    handleJoinRoom(name, code, res);
   } else {
     res.status(400).json({ message: "Invalid action." });
   }
 };
 
-async function createRoom(name, res) {
+function handleCreateRoom(name, res) {
   try {
-    let generatedCode = generateRandomCode(codeLength);
-    let isCodeTaken = true;
-
-    while (isCodeTaken) {
-      const result = await db.query(
-        "SELECT ID FROM game_room WHERE code = $1",
-        [generatedCode]
-      );
-      if (result.rows.length === 0) {
-        isCodeTaken = false;
-      } else {
-        generatedCode = generateRandomCode(codeLength);
-      }
+    let code = generateCode();
+    while (roomExists(code)) {
+      code = generateCode();
     }
 
-    const roomResult = await db.query(
-      "INSERT INTO game_room (code) VALUES ($1) RETURNING ID",
-      [generatedCode]
-    );
-    const roomId = roomResult.rows[0].id;
+    createRoom(code);
+    const player = addPlayer(code, name);
 
-    await db.query("INSERT INTO players (name, room_id) VALUES ($1, $2)", [
-      name,
-      roomId,
-    ]);
-
-    res.render("index", { name: name, code: generatedCode, isHost: 1 });
+    res.render("index", { name, code, isHost: 1, reconnectToken: player.reconnectToken });
   } catch (err) {
-    console.error(err);
-    res
-      .status(500)
-      .json({ message: "An error occurred while creating the room." });
+    console.error("Error creating room:", err);
+    res.status(500).json({ message: "An error occurred while creating the room." });
   }
 }
 
-async function joinRoom(name, code, res) {
+function handleJoinRoom(name, code, res) {
   try {
-    const result = await db.query(
-      "SELECT ID, has_started FROM game_room WHERE code = $1",
-      [code]
-    );
+    const room = getRoom(code);
 
-    if (result.rows.length === 0) {
+    if (!room) {
       return res.render("error-handler", { error: code, type: "room-code" });
     }
-
-    const roomId = result.rows[0].id;
-    const hasStarted = result.rows[0].has_started;
-    const nameCheck = await db.query(
-      "SELECT name FROM players WHERE room_id = $1 AND name = $2",
-      [roomId, name]
-    );
-    if (nameCheck.rows.length > 0) {
-      return res.render("error-handler", {
-        error: name,
-        type: "duplicate-name",
-      });
-    } else if (hasStarted != null) {
-      return res.render("error-handler", {
-        error: code,
-        type: "the-game-has-started",
-      });
-    } else {
-      await db.query("INSERT INTO players (name, room_id) VALUES ($1, $2)", [
-        name,
-        roomId,
-      ]);
-      return res.render("index", { name: name, code: code, isHost: 0 });
+    if (room.hasStarted) {
+      return res.render("error-handler", { error: code, type: "the-game-has-started" });
     }
+    if (playerExists(code, name)) {
+      return res.render("error-handler", { error: name, type: "duplicate-name" });
+    }
+
+    const player = addPlayer(code, name);
+    res.render("index", { name, code, isHost: 0, reconnectToken: player.reconnectToken });
   } catch (err) {
-    console.error(err);
-    res
-      .status(500)
-      .json({ message: "An error occurred while joining the room." });
+    console.error("Error joining room:", err);
+    res.status(500).json({ message: "An error occurred while joining the room." });
   }
 }
 
-function generateRandomCode(length) {
-  return randomBytes(Math.ceil(length / 2))
+function generateCode() {
+  return randomBytes(Math.ceil(CODE_LENGTH / 2))
     .toString("hex")
-    .slice(0, length)
+    .slice(0, CODE_LENGTH)
     .toUpperCase();
 }
